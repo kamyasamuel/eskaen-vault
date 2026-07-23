@@ -459,20 +459,6 @@ function getPermissionsForRole(role) {
   return permissions[role] || [];
 }
 
-
-// ============ FRONTEND SPA ROUTE ============
-// Serve the merged frontend (no nginx, no standalone static server)
-// This catches all non-API routes and serves the SPA index.html
-const frontendDir = path.join(__dirname, '..', 'frontend');
-const frontendIndex = path.join(frontendDir, 'index.html');
-app.get(/^\/?(?!api\/).*$/, (req, res) => {
-  if (fs.existsSync(frontendIndex)) {
-    res.sendFile(frontendIndex);
-  } else {
-    res.status(200).json({ service: 'Eskaen Vault', status: 'API running, frontend not built' });
-  }
-});
-
 // ============ START ============
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Eskaen Vault API running on port ${PORT}`);
