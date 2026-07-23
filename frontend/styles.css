@@ -499,6 +499,48 @@ a:hover { color: var(--accent-hover); }
 .form-group textarea { resize: vertical; min-height: 80px; }
 .form-group select option { background: var(--bg-card); }
 
+/* ===== SCOPE SELECTOR ===== */
+.scope-selector {
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.scope-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+  transition: background var(--transition);
+}
+
+.scope-option:hover { background: var(--bg-card-hover); }
+
+.scope-option input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.scope-badge {
+  display: inline-block;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  margin: 1px;
+  white-space: nowrap;
+}
+
 /* ===== TOKENS TABLE ===== */
 .table-container { overflow-x: auto; }
 

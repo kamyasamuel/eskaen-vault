@@ -659,6 +659,7 @@ function renderTokens(container) {
       <p style="font-size:13px;color:var(--text-secondary)">
         <i class="fas fa-info-circle"></i> Tokens are API keys with expiring access. 
         Roles control permissions: ${role === 'super_admin' ? 'Super Admin (full access), ' : ''}Admin, Editor, Viewer.
+        Scope restricts which categories a token can access.
       </p>
     </div>
     ${state.tokens.length === 0 ? `
@@ -674,6 +675,7 @@ function renderTokens(container) {
           <tr>
             <th>Name</th>
             <th>Role</th>
+            <th>Scope</th>
             <th>Status</th>
             <th>Created</th>
             <th>Expires</th>
@@ -686,6 +688,7 @@ function renderTokens(container) {
             <tr>
               <td><strong>${t.name}</strong></td>
               <td><span class="role-badge ${t.role}" style="font-size:10px">${t.role.replace('_', ' ')}</span></td>
+              <td style="font-size:11px">${t.scope && t.scope.length > 0 ? t.scope.map(s => `<span class="scope-badge">${s}</span>`).join(' ') : '<span style="color:var(--text-muted)">All</span>'}</td>
               <td><span class="status-badge ${t.is_active && !isExpired(t.expires_at) ? 'active' : 'expired'}">${t.is_active && !isExpired(t.expires_at) ? 'Active' : 'Inactive'}</span></td>
               <td style="font-size:12px">${formatDate(t.created_at)}</td>
               <td style="font-size:12px;color:${isExpired(t.expires_at) ? 'var(--red)' : 'var(--text-secondary)'}">${formatDate(t.expires_at)}</td>
@@ -706,6 +709,7 @@ function renderTokens(container) {
 
 function showCreateTokenModal() {
   const role = state.tokenData?.role;
+  const cats = state.categories;
   
   modal('Create Access Token', `
     <div class="form-group">
@@ -720,6 +724,22 @@ function showCreateTokenModal() {
         <option value="editor">Editor</option>
         <option value="viewer" selected>Viewer</option>
       </select>
+    </div>
+    <div class="form-group">
+      <label>Scope (categories this token can access)</label>
+      <div class="scope-selector" id="scope-selector">
+        <label class="scope-option">
+          <input type="checkbox" id="scope-all" checked onchange="toggleAllScopes()" />
+          <span>All Categories (unrestricted)</span>
+        </label>
+        ${cats.map(c => `
+          <label class="scope-option scope-cat">
+            <input type="checkbox" value="${c.slug}" class="scope-check" disabled />
+            <span>${c.icon || ''} ${c.name}</span>
+          </label>
+        `).join('')}
+      </div>
+      <small style="color:var(--text-muted);font-size:11px">Uncheck "All Categories" to restrict access to specific categories.</small>
     </div>
     <div class="form-group">
       <label>Expiry (hours)</label>
@@ -739,12 +759,27 @@ function showCreateTokenModal() {
   `);
 }
 
+function toggleAllScopes() {
+  const allChecked = document.getElementById('scope-all').checked;
+  document.querySelectorAll('.scope-check').forEach(cb => {
+    cb.disabled = allChecked;
+    if (allChecked) cb.checked = false;
+  });
+}
+
 async function handleCreateToken() {
   const name = document.getElementById('token-name').value.trim();
   const role = document.getElementById('token-role').value;
   const hours = parseInt(document.getElementById('token-hours').value) || 24;
   
   if (!name) { showToast('Token name is required', 'error'); return; }
+  
+  // Determine scope
+  const allChecked = document.getElementById('scope-all').checked;
+  let scope = null;
+  if (!allChecked) {
+    scope = Array.from(document.querySelectorAll('.scope-check:checked')).map(cb => cb.value);
+  }
   
   const btn = document.getElementById('create-token-btn');
   btn.disabled = true;
@@ -753,7 +788,7 @@ async function handleCreateToken() {
   try {
     const result = await api('/api/tokens', {
       method: 'POST',
-      body: { name, role, expiry_hours: hours }
+      body: { name, role, expiry_hours: hours, scope }
     });
     
     // Show the key

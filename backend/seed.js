@@ -42,8 +42,8 @@ function seed() {
   const existingSuper = db.prepare('SELECT id FROM tokens WHERE role = ?').get('super_admin');
   if (!existingSuper) {
     db.prepare(
-      'INSERT INTO tokens (id, name, key_hash, role, expires_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(uuidv4(), 'Super Admin (Auto-generated)', hash, 'super_admin', expiresAt.toISOString());
+      'INSERT INTO tokens (id, name, key_hash, role, scope, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(uuidv4(), 'Super Admin (Auto-generated)', hash, 'super_admin', null, expiresAt.toISOString());
     console.log('Super admin token created');
     console.log(`SUPER ADMIN KEY: ${superTokenRaw}`);
     console.log('SAVE THIS KEY - IT WILL NOT BE SHOWN AGAIN');

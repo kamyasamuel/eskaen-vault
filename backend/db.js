@@ -19,6 +19,7 @@ db.exec(`
     name TEXT NOT NULL,
     key_hash TEXT NOT NULL UNIQUE,
     role TEXT NOT NULL CHECK(role IN ('super_admin', 'admin', 'editor', 'viewer')),
+    scope TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     expires_at TEXT NOT NULL,
     last_used_at TEXT,
@@ -67,5 +68,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_tokens_expires_at ON tokens(expires_at);
   CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON activity_log(created_at);
 `);
+
+// Migration: add scope column if it doesn't exist
+try {
+  db.exec(`ALTER TABLE tokens ADD COLUMN scope TEXT`);
+  console.log('Migration: added scope column to tokens');
+} catch (e) {
+  // Column already exists — ignore
+}
 
 module.exports = db;

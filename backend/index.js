@@ -56,6 +56,9 @@ function authenticate(requiredRoles = []) {
         return res.status(403).json({ error: 'Insufficient permissions' });
       }
       
+      // Parse scope from JWT
+      req.token.scope = decoded.scope ? JSON.parse(decoded.scope) : null;
+      
       // Update last used
       db.prepare('UPDATE tokens SET last_used_at = datetime(\'now\') WHERE id = ?').run(decoded.tokenId);
       
@@ -74,6 +77,7 @@ function authenticate(requiredRoles = []) {
       }
 
       req.token = { ...matched, tokenId: matched.id };
+      req.token.scope = matched.scope ? JSON.parse(matched.scope) : null;
       
       // Update last used
       db.prepare('UPDATE tokens SET last_used_at = datetime(\'now\') WHERE id = ?').run(matched.id);
@@ -103,6 +107,7 @@ app.post('/api/auth/login', (req, res) => {
       tokenId: matched.id,
       name: matched.name,
       role: matched.role,
+      scope: matched.scope,
       jti
     },
     JWT_SECRET,
@@ -141,14 +146,19 @@ app.get('/api/auth/verify', authenticate(), (req, res) => {
 // List all tokens
 app.get('/api/tokens', authenticate(['super_admin', 'admin']), (req, res) => {
   const tokens = db.prepare(
-    'SELECT id, name, role, created_at, expires_at, last_used_at, is_active FROM tokens ORDER BY created_at DESC'
+    'SELECT id, name, role, scope, created_at, expires_at, last_used_at, is_active FROM tokens ORDER BY created_at DESC'
   ).all();
-  res.json({ tokens });
+  // Parse scope JSON for each token
+  const parsed = tokens.map(t => ({
+    ...t,
+    scope: t.scope ? JSON.parse(t.scope) : null
+  }));
+  res.json({ tokens: parsed });
 });
 
 // Create a new token
 app.post('/api/tokens', authenticate(['super_admin', 'admin']), (req, res) => {
-  const { name, role, expiry_hours } = req.body;
+  const { name, role, expiry_hours, scope } = req.body;
   
   if (!name || !role) {
     return res.status(400).json({ error: 'name and role are required' });
@@ -164,6 +174,18 @@ app.post('/api/tokens', authenticate(['super_admin', 'admin']), (req, res) => {
     return res.status(403).json({ error: 'Only super admins can create super admin tokens' });
   }
 
+  // Validate scope: must be an array of category slugs, or null/undefined for full access
+  let scopeJson = null;
+  if (scope && Array.isArray(scope) && scope.length > 0) {
+    // Verify all slugs exist
+    const validSlugs = db.prepare('SELECT slug FROM categories').all().map(c => c.slug);
+    const invalid = scope.filter(s => !validSlugs.includes(s));
+    if (invalid.length > 0) {
+      return res.status(400).json({ error: `Invalid category slugs: ${invalid.join(', ')}` });
+    }
+    scopeJson = JSON.stringify(scope);
+  }
+
   const rawKey = 'esk-' + role + '-' + uuidv4().replace(/-/g, '').substring(0, 24);
   const hash = bcrypt.hashSync(rawKey, 10);
   const hours = expiry_hours || (role === 'super_admin' ? 87600 : TOKEN_EXPIRY_HOURS);
@@ -173,18 +195,19 @@ app.post('/api/tokens', authenticate(['super_admin', 'admin']), (req, res) => {
 
   const tokenId = uuidv4();
   db.prepare(
-    'INSERT INTO tokens (id, name, key_hash, role, expires_at) VALUES (?, ?, ?, ?, ?)'
-  ).run(tokenId, name, hash, role, expiresAt.toISOString());
+    'INSERT INTO tokens (id, name, key_hash, role, scope, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(tokenId, name, hash, role, scopeJson, expiresAt.toISOString());
 
   // Log
   db.prepare(
     'INSERT INTO activity_log (action, entity_type, entity_id, token_name, details) VALUES (?, ?, ?, ?, ?)'
-  ).run('token_created', 'token', tokenId, req.token.name, `Created token "${name}" with role ${role}`);
+  ).run('token_created', 'token', tokenId, req.token.name, `Created token "${name}" with role ${role}${scopeJson ? ', scoped to: ' + scope.join(', ') : ''}`);
 
   res.json({
     id: tokenId,
     name,
     role,
+    scope: scope || null,
     raw_key: rawKey,
     expires_at: expiresAt.toISOString(),
     message: 'SAVE THIS KEY - It will not be shown again'
@@ -237,7 +260,7 @@ app.patch('/api/tokens/:id/extend', authenticate(['super_admin', 'admin']), (req
 
 // ============ DOCUMENT ROUTES ============
 
-// List documents (with filters)
+// List documents (with filters and scope enforcement)
 app.get('/api/documents', authenticate(), (req, res) => {
   const { category, search, page = 1, limit = 20 } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -246,6 +269,15 @@ app.get('/api/documents', authenticate(), (req, res) => {
   let countSql = 'SELECT COUNT(*) as total FROM documents WHERE is_archived = 0';
   const params = [];
   const countParams = [];
+
+  // Scope enforcement: if token has a scope, restrict to those categories
+  if (req.token.scope && Array.isArray(req.token.scope) && req.token.scope.length > 0) {
+    const placeholders = req.token.scope.map(() => '?').join(',');
+    sql += ` AND category IN (${placeholders})`;
+    countSql += ` AND category IN (${placeholders})`;
+    params.push(...req.token.scope);
+    countParams.push(...req.token.scope);
+  }
 
   if (category) {
     sql += ' AND category = ?';
@@ -279,22 +311,38 @@ app.get('/api/documents', authenticate(), (req, res) => {
   });
 });
 
-// Get single document
+// Get single document (scope enforced)
 app.get('/api/documents/:id', authenticate(), (req, res) => {
-  const doc = db.prepare(
-    'SELECT * FROM documents WHERE id = ? AND is_archived = 0'
-  ).get(req.params.id);
+  let sql = 'SELECT * FROM documents WHERE id = ? AND is_archived = 0';
+  const params = [req.params.id];
+
+  // Scope enforcement
+  if (req.token.scope && Array.isArray(req.token.scope) && req.token.scope.length > 0) {
+    const placeholders = req.token.scope.map(() => '?').join(',');
+    sql += ` AND category IN (${placeholders})`;
+    params.push(...req.token.scope);
+  }
+
+  const doc = db.prepare(sql).get(...params);
 
   if (!doc) return res.status(404).json({ error: 'Document not found' });
 
   res.json({ document: doc });
 });
 
-// Download document
+// Download document (scope enforced)
 app.get('/api/documents/:id/download', authenticate(), (req, res) => {
-  const doc = db.prepare(
-    'SELECT * FROM documents WHERE id = ? AND is_archived = 0'
-  ).get(req.params.id);
+  let sql = 'SELECT * FROM documents WHERE id = ? AND is_archived = 0';
+  const params = [req.params.id];
+
+  // Scope enforcement
+  if (req.token.scope && Array.isArray(req.token.scope) && req.token.scope.length > 0) {
+    const placeholders = req.token.scope.map(() => '?').join(',');
+    sql += ` AND category IN (${placeholders})`;
+    params.push(...req.token.scope);
+  }
+
+  const doc = db.prepare(sql).get(...params);
 
   if (!doc) return res.status(404).json({ error: 'Document not found' });
 
@@ -313,8 +361,8 @@ app.get('/api/documents/:id/download', authenticate(), (req, res) => {
   res.sendFile(filePath);
 });
 
-// Upload document
-app.post('/api/documents', authenticate(['super_admin', 'admin', 'editor']), upload.single('file'), (req, res) => {
+// Upload document (super_admin only)
+app.post('/api/documents', authenticate(['super_admin']), upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   const { title, description, category } = req.body;
@@ -355,9 +403,18 @@ app.post('/api/documents', authenticate(['super_admin', 'admin', 'editor']), upl
   });
 });
 
-// Update document metadata
+// Update document metadata (scope enforced)
 app.patch('/api/documents/:id', authenticate(['super_admin', 'admin', 'editor']), (req, res) => {
-  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND is_archived = 0').get(req.params.id);
+  let sql = 'SELECT * FROM documents WHERE id = ? AND is_archived = 0';
+  const lookupParams = [req.params.id];
+
+  if (req.token.scope && Array.isArray(req.token.scope) && req.token.scope.length > 0) {
+    const placeholders = req.token.scope.map(() => '?').join(',');
+    sql += ` AND category IN (${placeholders})`;
+    lookupParams.push(...req.token.scope);
+  }
+
+  const doc = db.prepare(sql).get(...lookupParams);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
 
   const { title, description, category } = req.body;
@@ -384,9 +441,18 @@ app.patch('/api/documents/:id', authenticate(['super_admin', 'admin', 'editor'])
   res.json({ document: updated });
 });
 
-// Delete (archive) document
+// Delete (archive) document (scope enforced)
 app.delete('/api/documents/:id', authenticate(['super_admin', 'admin']), (req, res) => {
-  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND is_archived = 0').get(req.params.id);
+  let sql = 'SELECT * FROM documents WHERE id = ? AND is_archived = 0';
+  const params = [req.params.id];
+
+  if (req.token.scope && Array.isArray(req.token.scope) && req.token.scope.length > 0) {
+    const placeholders = req.token.scope.map(() => '?').join(',');
+    sql += ` AND category IN (${placeholders})`;
+    params.push(...req.token.scope);
+  }
+
+  const doc = db.prepare(sql).get(...params);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
 
   db.prepare('UPDATE documents SET is_archived = 1, updated_at = datetime(\'now\') WHERE id = ?').run(req.params.id);
@@ -452,8 +518,8 @@ app.post('/api/seed', (req, res) => {
 function getPermissionsForRole(role) {
   const permissions = {
     super_admin: ['view', 'upload', 'edit', 'delete', 'manage_tokens', 'manage_admins', 'view_activity', 'export'],
-    admin: ['view', 'upload', 'edit', 'delete', 'manage_tokens', 'view_activity', 'export'],
-    editor: ['view', 'upload', 'edit'],
+    admin: ['view', 'edit', 'delete', 'manage_tokens', 'view_activity', 'export'],
+    editor: ['view', 'edit'],
     viewer: ['view']
   };
   return permissions[role] || [];
