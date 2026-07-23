@@ -459,6 +459,28 @@ function getPermissionsForRole(role) {
   return permissions[role] || [];
 }
 
+
+// ============ FRONTEND ROUTES ============
+// Serve the frontend assets (no nginx, no express.static for the frontend)
+const frontendDir = path.join(__dirname, '..', 'frontend');
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(frontendDir, 'index.html'));
+});
+
+app.get('/styles.css', (req, res) => {
+  res.sendFile(path.join(frontendDir, 'styles.css'));
+});
+
+app.get('/app.js', (req, res) => {
+  res.sendFile(path.join(frontendDir, 'app.js'));
+});
+
+// Catch-all for SPA routing: serve index.html for any non-API path
+app.get(/^\/?(?!api\/).*$/, (req, res) => {
+  res.sendFile(path.join(frontendDir, 'index.html'));
+});
+
 // ============ START ============
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Eskaen Vault API running on port ${PORT}`);
