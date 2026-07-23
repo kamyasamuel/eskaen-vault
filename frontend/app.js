@@ -17,7 +17,12 @@ let state = {
   stats: {},
   currentTab: 'documents',
   currentCategory: '',
-  searchQuery: ''
+  searchQuery: '',
+  capTableSummary: null,
+  equityPools: [],
+  shareholders: [],
+  capTableEvents: [],
+  capTablePoolFilter: ''
 };
 
 // ===== UTILITY FUNCTIONS =====
@@ -241,6 +246,35 @@ async function loadActivity() {
   } catch (e) { console.error('Failed to load activity', e); }
 }
 
+async function loadCapTableSummary() {
+  try {
+    state.capTableSummary = await api('/api/cap-table/summary');
+  } catch (e) { console.error('Failed to load cap table summary', e); }
+}
+
+async function loadEquityPools() {
+  try {
+    const result = await api('/api/cap-table/pools');
+    state.equityPools = result.pools || [];
+  } catch (e) { console.error('Failed to load equity pools', e); }
+}
+
+async function loadShareholders() {
+  try {
+    let url = '/api/cap-table/shareholders';
+    if (state.capTablePoolFilter) url += `?pool_id=${state.capTablePoolFilter}`;
+    const result = await api(url);
+    state.shareholders = result.shareholders || [];
+  } catch (e) { console.error('Failed to load shareholders', e); }
+}
+
+async function loadCapTableEvents() {
+  try {
+    const result = await api('/api/cap-table/events?limit=30');
+    state.capTableEvents = result.events || [];
+  } catch (e) { console.error('Failed to load cap table events', e); }
+}
+
 // ===== RENDER =====
 function renderDashboard() {
   const role = state.tokenData?.role || sessionStorage.getItem('vault_role') || 'viewer';
@@ -269,13 +303,18 @@ function renderDashboard() {
     <main class="main-content">
       <div class="dashboard-header">
         <div>
-          <h1>${state.currentTab === 'documents' ? 'Documents' : state.currentTab === 'tokens' ? 'Access Tokens' : 'Activity Log'}</h1>
+          <h1>${state.currentTab === 'documents' ? 'Documents' : state.currentTab === 'tokens' ? 'Access Tokens' : state.currentTab === 'activity' ? 'Activity Log' : 'Cap Table'}</h1>
           <p>${state.currentTab === 'documents' ? `Browse and manage ${state.stats.total_documents || 0} documents in the vault` : 
-               state.currentTab === 'tokens' ? 'Manage API keys and access permissions' : 'Track all vault activity'}</p>
+               state.currentTab === 'tokens' ? 'Manage API keys and access permissions' : 
+               state.currentTab === 'activity' ? 'Track all vault activity' : 'Ownership structure, equity distribution, and shareholder management'}</p>
         </div>
         <div style="display:flex;gap:8px">
           ${perms.includes('upload') ? `<button class="btn btn-primary btn-sm" onclick="showUploadModal()"><i class="fas fa-upload"></i> Upload</button>` : ''}
           ${role === 'super_admin' || role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="showCreateTokenModal()"><i class="fas fa-plus"></i> New Token</button>` : ''}
+          ${role === 'super_admin' ? `
+            <button class="btn btn-primary btn-sm" onclick="showAddPoolModal()"><i class="fas fa-layer-group"></i> Add Pool</button>
+            <button class="btn btn-primary btn-sm" onclick="showAddShareholderModal()"><i class="fas fa-user-plus"></i> Add Shareholder</button>
+          ` : ''}
         </div>
       </div>
 
@@ -309,6 +348,9 @@ function renderDashboard() {
         <button class="tab ${state.currentTab === 'documents' ? 'active' : ''}" onclick="switchTab('documents')">
           <i class="fas fa-file-alt"></i> Documents
         </button>
+        <button class="tab ${state.currentTab === 'cap-table' ? 'active' : ''}" onclick="switchTab('cap-table')">
+          <i class="fas fa-chart-pie"></i> Cap Table
+        </button>
         ${role === 'super_admin' || role === 'admin' ? `
         <button class="tab ${state.currentTab === 'tokens' ? 'active' : ''}" onclick="switchTab('tokens')">
           <i class="fas fa-key"></i> Tokens
@@ -333,6 +375,7 @@ function renderTabContent() {
   if (state.currentTab === 'documents') renderDocuments(el);
   else if (state.currentTab === 'tokens') renderTokens(el);
   else if (state.currentTab === 'activity') renderActivity(el);
+  else if (state.currentTab === 'cap-table') renderCapTable(el);
 }
 
 function renderDocuments(container) {
@@ -878,6 +921,9 @@ async function switchTab(tab) {
   
   if (tab === 'tokens') await loadTokens();
   if (tab === 'activity') await loadActivity();
+  if (tab === 'cap-table') {
+    await Promise.all([loadCapTableSummary(), loadEquityPools(), loadShareholders(), loadCapTableEvents()]);
+  }
   
   renderDashboard();
 }
@@ -888,6 +934,460 @@ function handleLogout() {
   state.tokenData = null;
   sessionStorage.clear();
   showAuth();
+}
+
+// ===== CAP TABLE RENDERING =====
+function formatPct(pct) {
+  return parseFloat(pct).toFixed(2) + '%';
+}
+
+function typeBadge(type) {
+  const map = {
+    founder: { emoji: '👤', cls: 'founder' },
+    investor: { emoji: '🏦', cls: 'investor' },
+    employee: { emoji: '👔', cls: 'employee' },
+    advisor: { emoji: '🗣️', cls: 'advisor' }
+  };
+  const m = map[type] || { emoji: '👤', cls: '' };
+  return `<span class="shareholder-type ${m.cls}">${m.emoji} ${type}</span>`;
+}
+
+function vestingBadge(sh) {
+  if (!sh.vesting_start && !sh.vesting_end) return `<span class="vesting-badge active">Active</span>`;
+  if (sh.status === 'fully_vested') return `<span class="vesting-badge fully-vested">Fully Vested</span>`;
+  if (sh.status === 'exited') return `<span class="vesting-badge exited">Exited</span>`;
+  if (sh.status === 'vesting') {
+    const pct = sh.shares_owned > 0 ? ((sh.vested_shares / sh.shares_owned) * 100).toFixed(0) : 0;
+    return `<span class="vesting-badge vesting">Vesting (${pct}%)</span>`;
+  }
+  return `<span class="vesting-badge active">Active</span>`;
+}
+
+function renderCapTable(container) {
+  const role = state.tokenData?.role || sessionStorage.getItem('vault_role') || 'viewer';
+  const s = state.capTableSummary || {};
+
+  container.innerHTML = `
+    <!-- Summary Cards -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon">📊</div>
+        <div class="stat-value">${(s.total_authorized || 0).toLocaleString()}</div>
+        <div class="stat-label">Total Authorized</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">📈</div>
+        <div class="stat-value">${(s.total_outstanding || 0).toLocaleString()}</div>
+        <div class="stat-label">Outstanding Shares</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">🏢</div>
+        <div class="stat-value">${s.pool_count || 0}</div>
+        <div class="stat-label">Equity Pools</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">👥</div>
+        <div class="stat-value">${s.shareholder_count || 0}</div>
+        <div class="stat-label">Shareholders</div>
+      </div>
+    </div>
+
+    <!-- Pool Cards -->
+    <h3 style="margin-bottom:12px;font-size:16px;font-weight:600">Equity Pools</h3>
+    <div class="pool-cards">
+      ${state.equityPools.length === 0 ? `<p style="color:var(--text-muted)">No equity pools yet.</p>` : ''}
+      ${state.equityPools.map(p => {
+        const issued = p.issued_shares || 0;
+        const pct = p.total_shares > 0 ? ((issued / p.total_shares) * 100).toFixed(1) : 0;
+        return `
+          <div class="pool-card">
+            <div class="pool-card-header">
+              <div>
+                <strong>${p.name}</strong>
+                <span class="pool-class">${p.class || 'Common'}</span>
+              </div>
+              <div style="text-align:right">
+                <span style="font-size:18px;font-weight:700">${issued.toLocaleString()}</span>
+                <span style="font-size:12px;color:var(--text-muted)"> / ${p.total_shares.toLocaleString()} shares</span>
+              </div>
+            </div>
+            <div class="pool-progress-bar">
+              <div class="pool-progress-fill" style="width:${pct}%"></div>
+            </div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-top:4px">${pct}% issued · ${(p.total_shares - issued).toLocaleString()} remaining · ${p.shareholder_count || 0} holders</div>
+            ${role === 'super_admin' ? `
+              <div style="margin-top:8px">
+                <button class="btn btn-secondary btn-sm" onclick="showEditPoolModal('${p.id}')"><i class="fas fa-edit"></i> Edit</button>
+              </div>` : ''}
+          </div>
+        `;
+      }).join('')}
+    </div>
+
+    <!-- Shareholders Table -->
+    <h3 style="margin:24px 0 12px;font-size:16px;font-weight:600">Shareholders</h3>
+    <div style="margin-bottom:12px;display:flex;align-items:center;gap:12px">
+      <select id="cap-pool-filter" onchange="handleCapPoolFilter()" style="padding:6px 12px;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px;font-family:var(--font);outline:none">
+        <option value="">All Pools</option>
+        ${state.equityPools.map(p => `<option value="${p.id}" ${state.capTablePoolFilter === p.id ? 'selected' : ''}>${p.name}</option>`).join('')}
+      </select>
+    </div>
+    ${state.shareholders.length === 0 ? `<p style="color:var(--text-muted)">No shareholders yet.</p>` : `
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Shares</th>
+            <th>Ownership</th>
+            <th>Pool</th>
+            <th>Vesting</th>
+            <th>Vested</th>
+            ${role === 'super_admin' ? '<th>Actions</th>' : ''}
+          </tr>
+        </thead>
+        <tbody>
+          ${state.shareholders.map(sh => {
+            const pool = state.equityPools.find(p => p.id === sh.equity_pool_id);
+            return `
+            <tr>
+              <td>
+                <strong>${sh.name}</strong>
+                ${sh.email ? `<div style="font-size:11px;color:var(--text-muted)">${sh.email}</div>` : ''}
+              </td>
+              <td>${typeBadge(sh.type)}</td>
+              <td>${sh.shares_owned.toLocaleString()}</td>
+              <td><strong>${formatPct(sh.ownership_pct)}</strong></td>
+              <td style="font-size:12px">${pool ? pool.name : '—'}</td>
+              <td>${vestingBadge(sh)}</td>
+              <td style="font-size:13px">${sh.vested_shares.toLocaleString()}</td>
+              ${role === 'super_admin' ? `
+              <td>
+                <div style="display:flex;gap:4px">
+                  <button class="btn btn-secondary btn-sm" onclick="showEditShareholderModal('${sh.id}')" title="Edit"><i class="fas fa-edit"></i></button>
+                  ${sh.status !== 'exited' ? `<button class="btn btn-danger btn-sm" onclick="exitShareholder('${sh.id}')" title="Mark exited"><i class="fas fa-sign-out-alt"></i></button>` : ''}
+                </div>
+              </td>` : ''}
+            </tr>
+          `}).join('')}
+        </tbody>
+      </table>
+    </div>`}
+
+    <!-- Events / History -->
+    <h3 style="margin:24px 0 12px;font-size:16px;font-weight:600">Recent Changes</h3>
+    ${state.capTableEvents.length === 0 ? `<p style="color:var(--text-muted)">No events yet.</p>` : `
+    <div class="cap-events-list">
+      ${state.capTableEvents.map(e => {
+        const iconMap = {
+          issuance: '📥', transfer: '🔄', vest: '⏳', cancel: '❌',
+          convert: '🔁', edit: '✏️', pool_create: '🏗️', pool_update: '🔧'
+        };
+        return `
+        <div class="cap-event">
+          <div class="cap-event-icon">${iconMap[e.event_type] || '📋'}</div>
+          <div class="cap-event-body">
+            <div class="cap-event-type">${e.event_type.replace('_', ' ')}</div>
+            <div class="cap-event-desc">${e.description || ''}</div>
+            <div class="cap-event-meta">
+              ${e.shareholder_name ? `<span>👤 ${e.shareholder_name}</span>` : ''}
+              ${e.pool_name ? `<span>📊 ${e.pool_name}</span>` : ''}
+              ${e.delta_shares ? `<span style="color:${e.delta_shares > 0 ? 'var(--green)' : 'var(--red)'}">${e.delta_shares > 0 ? '+' : ''}${e.delta_shares.toLocaleString()} shares</span>` : ''}
+              <span>${formatDateFull(e.created_at)}</span>
+            </div>
+          </div>
+        </div>
+        `;
+      }).join('')}
+    </div>`}
+  `;
+}
+
+// ===== CAP TABLE MODALS =====
+
+function showAddPoolModal() {
+  modal('Add Equity Pool', `
+    <div class="form-group">
+      <label>Pool Name</label>
+      <input type="text" id="pool-name" placeholder="e.g., Series A Preferred" />
+    </div>
+    <div class="form-group">
+      <label>Share Class</label>
+      <select id="pool-class">
+        <option value="Common">Common</option>
+        <option value="Preferred">Preferred</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Total Authorized Shares</label>
+      <input type="number" id="pool-shares" placeholder="e.g., 5000000" min="1" />
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <textarea id="pool-desc" placeholder="Brief description..."></textarea>
+    </div>
+  `, `
+    <button class="btn btn-secondary btn-sm" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary btn-sm" onclick="handleAddPool()"><i class="fas fa-plus"></i> Create Pool</button>
+  `);
+}
+
+async function handleAddPool() {
+  const name = document.getElementById('pool-name').value.trim();
+  const poolClass = document.getElementById('pool-class').value;
+  const total_shares = parseInt(document.getElementById('pool-shares').value);
+  const description = document.getElementById('pool-desc').value.trim();
+
+  if (!name || !total_shares) { showToast('Name and shares are required', 'error'); return; }
+
+  try {
+    await api('/api/cap-table/pools', { method: 'POST', body: { name, total_shares, class: poolClass, description } });
+    closeModal();
+    showToast('Equity pool created');
+    await Promise.all([loadCapTableSummary(), loadEquityPools(), loadShareholders(), loadCapTableEvents()]);
+    document.getElementById('tab-content') && renderCapTable(document.getElementById('tab-content'));
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+function showEditPoolModal(poolId) {
+  const pool = state.equityPools.find(p => p.id === poolId);
+  if (!pool) return;
+  modal('Edit Equity Pool', `
+    <div class="form-group">
+      <label>Pool Name</label>
+      <input type="text" id="edit-pool-name" value="${pool.name}" />
+    </div>
+    <div class="form-group">
+      <label>Share Class</label>
+      <select id="edit-pool-class">
+        <option value="Common" ${pool.class === 'Common' ? 'selected' : ''}>Common</option>
+        <option value="Preferred" ${pool.class === 'Preferred' ? 'selected' : ''}>Preferred</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Total Authorized Shares</label>
+      <input type="number" id="edit-pool-shares" value="${pool.total_shares}" min="1" />
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <textarea id="edit-pool-desc">${pool.description || ''}</textarea>
+    </div>
+  `, `
+    <button class="btn btn-secondary btn-sm" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary btn-sm" onclick="handleEditPool('${poolId}')"><i class="fas fa-save"></i> Save</button>
+  `);
+}
+
+async function handleEditPool(poolId) {
+  const name = document.getElementById('edit-pool-name').value.trim();
+  const poolClass = document.getElementById('edit-pool-class').value;
+  const total_shares = parseInt(document.getElementById('edit-pool-shares').value);
+  const description = document.getElementById('edit-pool-desc').value.trim();
+
+  if (!name || !total_shares) { showToast('Name and shares are required', 'error'); return; }
+
+  try {
+    await api(`/api/cap-table/pools/${poolId}`, { method: 'PATCH', body: { name, total_shares, class: poolClass, description } });
+    closeModal();
+    showToast('Pool updated');
+    await Promise.all([loadCapTableSummary(), loadEquityPools(), loadShareholders(), loadCapTableEvents()]);
+    document.getElementById('tab-content') && renderCapTable(document.getElementById('tab-content'));
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+function showAddShareholderModal() {
+  const pools = state.equityPools;
+  modal('Add Shareholder', `
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="sh-name" placeholder="Full name or entity name" />
+    </div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" id="sh-email" placeholder="email@example.com" />
+    </div>
+    <div class="form-group">
+      <label>Type</label>
+      <select id="sh-type">
+        <option value="founder">Founder</option>
+        <option value="investor">Investor</option>
+        <option value="employee">Employee</option>
+        <option value="advisor">Advisor</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Equity Pool</label>
+      <select id="sh-pool">
+        <option value="">Select pool...</option>
+        ${pools.map(p => `<option value="${p.id}">${p.name} (${p.total_shares.toLocaleString()} authorized)</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Shares Owned</label>
+      <input type="number" id="sh-shares" placeholder="Number of shares" min="1" />
+    </div>
+    <div class="form-group">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="sh-has-vesting" onchange="toggleVestingFields()" />
+        Has Vesting Schedule
+      </label>
+    </div>
+    <div id="vesting-fields" style="display:none">
+      <div class="form-group">
+        <label>Vesting Start Date</label>
+        <input type="date" id="sh-vesting-start" />
+      </div>
+      <div class="form-group">
+        <label>Vesting End Date</label>
+        <input type="date" id="sh-vesting-end" />
+      </div>
+      <div class="form-group">
+        <label>Cliff Date</label>
+        <input type="date" id="sh-cliff-date" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="sh-notes" placeholder="Any additional notes..."></textarea>
+    </div>
+  `, `
+    <button class="btn btn-secondary btn-sm" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary btn-sm" onclick="handleAddShareholder()"><i class="fas fa-user-plus"></i> Add</button>
+  `);
+}
+
+function toggleVestingFields() {
+  const checked = document.getElementById('sh-has-vesting').checked;
+  document.getElementById('vesting-fields').style.display = checked ? 'block' : 'none';
+}
+
+async function handleAddShareholder() {
+  const name = document.getElementById('sh-name').value.trim();
+  const email = document.getElementById('sh-email').value.trim();
+  const type = document.getElementById('sh-type').value;
+  const equity_pool_id = document.getElementById('sh-pool').value;
+  const shares_owned = parseInt(document.getElementById('sh-shares').value);
+  const notes = document.getElementById('sh-notes').value.trim();
+
+  if (!name || !type || !equity_pool_id || !shares_owned) {
+    showToast('Name, type, pool, and shares are required', 'error'); return;
+  }
+
+  const body = { name, email, type, equity_pool_id, shares_owned, notes };
+  if (document.getElementById('sh-has-vesting').checked) {
+    body.vesting_start = document.getElementById('sh-vesting-start').value;
+    body.vesting_end = document.getElementById('sh-vesting-end').value;
+    body.cliff_date = document.getElementById('sh-cliff-date').value;
+  }
+
+  try {
+    await api('/api/cap-table/shareholders', { method: 'POST', body });
+    closeModal();
+    showToast('Shareholder added');
+    await Promise.all([loadCapTableSummary(), loadEquityPools(), loadShareholders(), loadCapTableEvents()]);
+    document.getElementById('tab-content') && renderCapTable(document.getElementById('tab-content'));
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+async function showEditShareholderModal(shId) {
+  showLoading(true);
+  try {
+    const result = await api(`/api/cap-table/shareholders/${shId}`);
+    const sh = result.shareholder;
+    const pools = state.equityPools;
+
+    modal('Edit Shareholder', `
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="edit-sh-name" value="${sh.name}" />
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="edit-sh-email" value="${sh.email || ''}" />
+      </div>
+      <div class="form-group">
+        <label>Type</label>
+        <select id="edit-sh-type">
+          ${['founder','investor','employee','advisor'].map(t => `<option value="${t}" ${sh.type === t ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Equity Pool</label>
+        <select id="edit-sh-pool">
+          ${pools.map(p => `<option value="${p.id}" ${sh.equity_pool_id === p.id ? 'selected' : ''}>${p.name}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Shares Owned</label>
+        <input type="number" id="edit-sh-shares" value="${sh.shares_owned}" min="1" />
+      </div>
+      <div class="form-group">
+        <label>Vesting Start</label>
+        <input type="date" id="edit-sh-vesting-start" value="${sh.vesting_start || ''}" />
+      </div>
+      <div class="form-group">
+        <label>Vesting End</label>
+        <input type="date" id="edit-sh-vesting-end" value="${sh.vesting_end || ''}" />
+      </div>
+      <div class="form-group">
+        <label>Cliff Date</label>
+        <input type="date" id="edit-sh-cliff-date" value="${sh.cliff_date || ''}" />
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select id="edit-sh-status">
+          ${['active','vesting','fully_vested','exited'].map(s => `<option value="${s}" ${sh.status === s ? 'selected' : ''}>${s.replace('_', ' ')}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea id="edit-sh-notes">${sh.notes || ''}</textarea>
+      </div>
+    `, `
+      <button class="btn btn-secondary btn-sm" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="handleEditShareholder('${shId}')"><i class="fas fa-save"></i> Save</button>
+    `);
+  } catch (err) { showToast(err.message, 'error'); } finally { showLoading(false); }
+}
+
+async function handleEditShareholder(shId) {
+  const name = document.getElementById('edit-sh-name').value.trim();
+  const email = document.getElementById('edit-sh-email').value.trim();
+  const type = document.getElementById('edit-sh-type').value;
+  const equity_pool_id = document.getElementById('edit-sh-pool').value;
+  const shares_owned = parseInt(document.getElementById('edit-sh-shares').value);
+  const vesting_start = document.getElementById('edit-sh-vesting-start').value;
+  const vesting_end = document.getElementById('edit-sh-vesting-end').value;
+  const cliff_date = document.getElementById('edit-sh-cliff-date').value;
+  const status = document.getElementById('edit-sh-status').value;
+  const notes = document.getElementById('edit-sh-notes').value.trim();
+
+  const body = { name, email, type, equity_pool_id, shares_owned, vesting_start: vesting_start || null, vesting_end: vesting_end || null, cliff_date: cliff_date || null, status, notes };
+
+  try {
+    await api(`/api/cap-table/shareholders/${shId}`, { method: 'PATCH', body });
+    closeModal();
+    showToast('Shareholder updated');
+    await Promise.all([loadCapTableSummary(), loadEquityPools(), loadShareholders(), loadCapTableEvents()]);
+    document.getElementById('tab-content') && renderCapTable(document.getElementById('tab-content'));
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+async function exitShareholder(shId) {
+  if (!confirm('Mark this shareholder as exited? Their shares will be removed from outstanding totals.')) return;
+  try {
+    await api(`/api/cap-table/shareholders/${shId}`, { method: 'DELETE' });
+    showToast('Shareholder marked as exited');
+    await Promise.all([loadCapTableSummary(), loadEquityPools(), loadShareholders(), loadCapTableEvents()]);
+    document.getElementById('tab-content') && renderCapTable(document.getElementById('tab-content'));
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+async function handleCapPoolFilter() {
+  state.capTablePoolFilter = document.getElementById('cap-pool-filter').value;
+  await loadShareholders();
+  document.getElementById('tab-content') && renderCapTable(document.getElementById('tab-content'));
 }
 
 // ===== INIT =====

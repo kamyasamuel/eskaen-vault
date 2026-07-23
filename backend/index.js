@@ -501,6 +501,303 @@ app.get('/api/stats', authenticate(), (req, res) => {
   });
 });
 
+// ============ CAP TABLE ROUTES ============
+
+// --- Helpers ---
+function computeVestedShares(vestingStart, vestingEnd, cliffDate, totalShares) {
+  if (!vestingStart || !vestingEnd || !totalShares) return totalShares;
+  const now = new Date();
+  const start = new Date(vestingStart);
+  const end = new Date(vestingEnd);
+
+  if (now < start) return 0;
+  if (now >= end) return totalShares;
+
+  // Cliff check: if cliff date exists and hasn't passed, nothing vests
+  if (cliffDate && now < new Date(cliffDate)) return 0;
+
+  const totalDuration = end - start;
+  const elapsed = now - start;
+  const ratio = Math.min(elapsed / totalDuration, 1);
+  return Math.floor(totalShares * ratio);
+}
+
+function computeShareholderStatus(vestingStart, vestingEnd, cliffDate, totalShares) {
+  if (!vestingStart || !vestingEnd) return 'active';
+  const now = new Date();
+  const start = new Date(vestingStart);
+  const end = new Date(vestingEnd);
+
+  if (now < start) return 'active';
+  if (now >= end) return 'fully_vested';
+  if (cliffDate && now < new Date(cliffDate)) return 'active';
+  return 'vesting';
+}
+
+// --- Summary ---
+app.get('/api/cap-table/summary', authenticate(), (req, res) => {
+  const pools = db.prepare('SELECT * FROM equity_pools ORDER BY created_at ASC').all();
+  const shareholders = db.prepare('SELECT * FROM shareholders WHERE status != ?').all('exited');
+
+  const totalAuthorized = pools.reduce((sum, p) => sum + p.total_shares, 0);
+  const totalOutstanding = shareholders.reduce((sum, s) => sum + s.shares_owned, 0);
+  const fullyDiluted = totalAuthorized; // authorized = fully diluted in this model
+
+  const poolBreakdown = pools.map(p => {
+    const issued = shareholders.filter(s => s.equity_pool_id === p.id).reduce((sum, s) => sum + s.shares_owned, 0);
+    return {
+      id: p.id,
+      name: p.name,
+      class: p.class,
+      authorized: p.total_shares,
+      issued,
+      remaining: p.total_shares - issued,
+      percent_issued: p.total_shares > 0 ? ((issued / p.total_shares) * 100).toFixed(2) : '0.00'
+    };
+  });
+
+  res.json({
+    total_authorized: totalAuthorized,
+    total_outstanding: totalOutstanding,
+    fully_diluted: fullyDiluted,
+    shareholder_count: shareholders.length,
+    pool_count: pools.length,
+    pools: poolBreakdown
+  });
+});
+
+// --- Equity Pools ---
+app.get('/api/cap-table/pools', authenticate(), (req, res) => {
+  const pools = db.prepare('SELECT * FROM equity_pools ORDER BY created_at ASC').all();
+  const enriched = pools.map(p => {
+    const count = db.prepare('SELECT COUNT(*) as count FROM shareholders WHERE equity_pool_id = ? AND status != ?').get(p.id, 'exited');
+    const issued = db.prepare('SELECT COALESCE(SUM(shares_owned), 0) as total FROM shareholders WHERE equity_pool_id = ? AND status != ?').get(p.id, 'exited');
+    return { ...p, shareholder_count: count.count, issued_shares: issued.total };
+  });
+  res.json({ pools: enriched });
+});
+
+app.post('/api/cap-table/pools', authenticate(['super_admin']), (req, res) => {
+  const { name, total_shares, class: poolClass, description } = req.body;
+  if (!name || !total_shares) return res.status(400).json({ error: 'name and total_shares are required' });
+
+  const poolId = uuidv4();
+  db.prepare(
+    'INSERT INTO equity_pools (id, name, total_shares, class, description) VALUES (?, ?, ?, ?, ?)'
+  ).run(poolId, name, total_shares, poolClass || 'Common', description || '');
+
+  db.prepare(
+    'INSERT INTO cap_table_events (event_type, equity_pool_id, description, performed_by) VALUES (?, ?, ?, ?)'
+  ).run('pool_create', poolId, `Created equity pool "${name}" with ${total_shares.toLocaleString()} shares`, req.token.name);
+
+  db.prepare(
+    'INSERT INTO activity_log (action, entity_type, entity_id, token_name, details) VALUES (?, ?, ?, ?, ?)'
+  ).run('cap_table', 'equity_pool', poolId, req.token.name, `Created pool "${name}"`);
+
+  res.status(201).json({ id: poolId, name, total_shares, class: poolClass || 'Common' });
+});
+
+app.patch('/api/cap-table/pools/:id', authenticate(['super_admin']), (req, res) => {
+  const pool = db.prepare('SELECT * FROM equity_pools WHERE id = ?').get(req.params.id);
+  if (!pool) return res.status(404).json({ error: 'Pool not found' });
+
+  const { name, total_shares, class: poolClass, description } = req.body;
+  const updates = [];
+  const params = [];
+
+  if (name) { updates.push('name = ?'); params.push(name); }
+  if (total_shares !== undefined) { updates.push('total_shares = ?'); params.push(total_shares); }
+  if (poolClass) { updates.push('class = ?'); params.push(poolClass); }
+  if (description !== undefined) { updates.push('description = ?'); params.push(description); }
+
+  if (updates.length > 0) {
+    updates.push('updated_at = datetime(\'now\')');
+    params.push(req.params.id);
+    db.prepare(`UPDATE equity_pools SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+  }
+
+  db.prepare(
+    'INSERT INTO cap_table_events (event_type, equity_pool_id, description, performed_by) VALUES (?, ?, ?, ?)'
+  ).run('pool_update', req.params.id, `Updated pool "${pool.name}"`, req.token.name);
+
+  db.prepare(
+    'INSERT INTO activity_log (action, entity_type, entity_id, token_name, details) VALUES (?, ?, ?, ?, ?)'
+  ).run('cap_table', 'equity_pool', req.params.id, req.token.name, `Updated pool "${pool.name}"`);
+
+  const updated = db.prepare('SELECT * FROM equity_pools WHERE id = ?').get(req.params.id);
+  res.json({ pool: updated });
+});
+
+// --- Shareholders ---
+app.get('/api/cap-table/shareholders', authenticate(), (req, res) => {
+  const { pool_id } = req.query;
+  let sql = 'SELECT * FROM shareholders';
+  const params = [];
+
+  if (pool_id) {
+    sql += ' WHERE equity_pool_id = ?';
+    params.push(pool_id);
+  }
+
+  sql += ' ORDER BY shares_owned DESC';
+  const shareholders = db.prepare(sql).all(...params);
+
+  // Compute total outstanding for ownership %
+  const totalOutstanding = db.prepare(
+    'SELECT COALESCE(SUM(shares_owned), 0) as total FROM shareholders WHERE status != ?'
+  ).get('exited');
+
+  const enriched = shareholders.map(s => ({
+    ...s,
+    ownership_pct: totalOutstanding.total > 0 ? ((s.shares_owned / totalOutstanding.total) * 100).toFixed(2) : '0.00'
+  }));
+
+  res.json({ shareholders: enriched, total_outstanding: totalOutstanding.total });
+});
+
+app.get('/api/cap-table/shareholders/:id', authenticate(), (req, res) => {
+  const sh = db.prepare('SELECT * FROM shareholders WHERE id = ?').get(req.params.id);
+  if (!sh) return res.status(404).json({ error: 'Shareholder not found' });
+
+  const totalOutstanding = db.prepare(
+    'SELECT COALESCE(SUM(shares_owned), 0) as total FROM shareholders WHERE status != ?'
+  ).get('exited');
+
+  const pool = db.prepare('SELECT * FROM equity_pools WHERE id = ?').get(sh.equity_pool_id);
+
+  res.json({
+    shareholder: {
+      ...sh,
+      ownership_pct: totalOutstanding.total > 0 ? ((sh.shares_owned / totalOutstanding.total) * 100).toFixed(2) : '0.00',
+      pool_name: pool ? pool.name : null
+    }
+  });
+});
+
+app.post('/api/cap-table/shareholders', authenticate(['super_admin']), (req, res) => {
+  const { name, email, type, shares_owned, equity_pool_id, vesting_start, vesting_end, cliff_date, notes } = req.body;
+
+  if (!name || !type || !shares_owned || !equity_pool_id) {
+    return res.status(400).json({ error: 'name, type, shares_owned, and equity_pool_id are required' });
+  }
+
+  const pool = db.prepare('SELECT * FROM equity_pools WHERE id = ?').get(equity_pool_id);
+  if (!pool) return res.status(400).json({ error: 'Equity pool not found' });
+
+  const vested = computeVestedShares(vesting_start, vesting_end, cliff_date, shares_owned);
+  const status = computeShareholderStatus(vesting_start, vesting_end, cliff_date, shares_owned);
+
+  const shId = uuidv4();
+  db.prepare(
+    `INSERT INTO shareholders (id, name, email, type, shares_owned, equity_pool_id, vesting_start, vesting_end, cliff_date, vested_shares, status, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(shId, name, email || '', type, shares_owned, equity_pool_id, vesting_start || null, vesting_end || null, cliff_date || null, vested, status, notes || '');
+
+  db.prepare(
+    'INSERT INTO cap_table_events (event_type, shareholder_id, shares_before, shares_after, delta_shares, equity_pool_id, description, performed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run('issuance', shId, 0, shares_owned, shares_owned, equity_pool_id, `Issued ${shares_owned.toLocaleString()} shares to ${name}`, req.token.name);
+
+  db.prepare(
+    'INSERT INTO activity_log (action, entity_type, entity_id, token_name, details) VALUES (?, ?, ?, ?, ?)'
+  ).run('cap_table', 'shareholder', shId, req.token.name, `Added shareholder "${name}"`);
+
+  res.status(201).json({ id: shId, name, type, shares_owned, status, vested_shares: vested });
+});
+
+app.patch('/api/cap-table/shareholders/:id', authenticate(['super_admin']), (req, res) => {
+  const sh = db.prepare('SELECT * FROM shareholders WHERE id = ?').get(req.params.id);
+  if (!sh) return res.status(404).json({ error: 'Shareholder not found' });
+
+  const { name, email, type, shares_owned, equity_pool_id, vesting_start, vesting_end, cliff_date, status, notes } = req.body;
+  const updates = [];
+  const params = [];
+
+  if (name) { updates.push('name = ?'); params.push(name); }
+  if (email !== undefined) { updates.push('email = ?'); params.push(email); }
+  if (type) { updates.push('type = ?'); params.push(type); }
+  if (equity_pool_id) { updates.push('equity_pool_id = ?'); params.push(equity_pool_id); }
+  if (vesting_start !== undefined) { updates.push('vesting_start = ?'); params.push(vesting_start); }
+  if (vesting_end !== undefined) { updates.push('vesting_end = ?'); params.push(vesting_end); }
+  if (cliff_date !== undefined) { updates.push('cliff_date = ?'); params.push(cliff_date); }
+  if (status) { updates.push('status = ?'); params.push(status); }
+  if (notes !== undefined) { updates.push('notes = ?'); params.push(notes); }
+
+  // If shares changed, log a transfer/edit event
+  const sharesChanged = shares_owned !== undefined && shares_owned !== sh.shares_owned;
+  if (sharesChanged) {
+    updates.push('shares_owned = ?');
+    params.push(shares_owned);
+  }
+
+  // Recompute vested shares and status if vesting fields or shares changed
+  const vs = vesting_start !== undefined ? vesting_start : sh.vesting_start;
+  const ve = vesting_end !== undefined ? vesting_end : sh.vesting_end;
+  const cd = cliff_date !== undefined ? cliff_date : sh.cliff_date;
+  const so = sharesChanged ? shares_owned : sh.shares_owned;
+
+  if (sharesChanged || vesting_start !== undefined || vesting_end !== undefined || cliff_date !== undefined) {
+    const vested = computeVestedShares(vs, ve, cd, so);
+    const newStatus = computeShareholderStatus(vs, ve, cd, so);
+    updates.push('vested_shares = ?'); params.push(vested);
+    updates.push('status = ?'); params.push(newStatus);
+  }
+
+  if (updates.length > 0) {
+    updates.push('updated_at = datetime(\'now\')');
+    params.push(req.params.id);
+    db.prepare(`UPDATE shareholders SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+  }
+
+  if (sharesChanged) {
+    const delta = shares_owned - sh.shares_owned;
+    db.prepare(
+      'INSERT INTO cap_table_events (event_type, shareholder_id, shares_before, shares_after, delta_shares, equity_pool_id, description, performed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run('edit', sh.id, sh.shares_owned, shares_owned, delta, sh.equity_pool_id, `Adjusted shares for ${sh.name}: ${sh.shares_owned.toLocaleString()} → ${shares_owned.toLocaleString()}`, req.token.name);
+  }
+
+  db.prepare(
+    'INSERT INTO activity_log (action, entity_type, entity_id, token_name, details) VALUES (?, ?, ?, ?, ?)'
+  ).run('cap_table', 'shareholder', req.params.id, req.token.name, `Updated shareholder "${sh.name}"`);
+
+  const updated = db.prepare('SELECT * FROM shareholders WHERE id = ?').get(req.params.id);
+  res.json({ shareholder: updated });
+});
+
+app.delete('/api/cap-table/shareholders/:id', authenticate(['super_admin']), (req, res) => {
+  const sh = db.prepare('SELECT * FROM shareholders WHERE id = ?').get(req.params.id);
+  if (!sh) return res.status(404).json({ error: 'Shareholder not found' });
+
+  db.prepare('UPDATE shareholders SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run('exited', req.params.id);
+
+  db.prepare(
+    'INSERT INTO cap_table_events (event_type, shareholder_id, shares_before, shares_after, delta_shares, equity_pool_id, description, performed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run('cancel', sh.id, sh.shares_owned, 0, -sh.shares_owned, sh.equity_pool_id, `Marked ${sh.name} as exited (${sh.shares_owned.toLocaleString()} shares)`, req.token.name);
+
+  db.prepare(
+    'INSERT INTO activity_log (action, entity_type, entity_id, token_name, details) VALUES (?, ?, ?, ?, ?)'
+  ).run('cap_table', 'shareholder', req.params.id, req.token.name, `Exited shareholder "${sh.name}"`);
+
+  res.json({ message: 'Shareholder marked as exited' });
+});
+
+// --- Events / History ---
+app.get('/api/cap-table/events', authenticate(), (req, res) => {
+  const { limit = 50, shareholder_id } = req.query;
+  let sql = 'SELECT e.*, s.name as shareholder_name, p.name as pool_name FROM cap_table_events e LEFT JOIN shareholders s ON e.shareholder_id = s.id LEFT JOIN equity_pools p ON e.equity_pool_id = p.id';
+  const params = [];
+
+  if (shareholder_id) {
+    sql += ' WHERE e.shareholder_id = ?';
+    params.push(shareholder_id);
+  }
+
+  sql += ' ORDER BY e.created_at DESC LIMIT ?';
+  params.push(parseInt(limit));
+
+  const events = db.prepare(sql).all(...params);
+  res.json({ events });
+});
+
 // ============ SEED CHECK ============
 app.post('/api/seed', (req, res) => {
   const { super_key } = req.body;

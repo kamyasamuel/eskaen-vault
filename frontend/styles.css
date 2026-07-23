@@ -646,6 +646,147 @@ tbody tr:hover { background: var(--bg-card-hover); }
   .dashboard-header { flex-direction: column; align-items: flex-start; }
 }
 
+/* ===== CAP TABLE ===== */
+.pool-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.pool-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 20px;
+  transition: var(--transition);
+}
+
+.pool-card:hover { border-color: var(--border-hover); }
+
+.pool-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.pool-class {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  margin-left: 8px;
+}
+
+.pool-progress-bar {
+  height: 8px;
+  background: var(--bg-input);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.pool-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #a29bfe);
+  border-radius: 4px;
+  transition: width 0.6s ease;
+  min-width: 2px;
+}
+
+.shareholder-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.shareholder-type.founder { background: var(--yellow-bg); color: var(--yellow); }
+.shareholder-type.investor { background: var(--green-bg); color: var(--green); }
+.shareholder-type.employee { background: var(--blue-bg); color: var(--blue); }
+.shareholder-type.advisor { background: var(--accent-subtle); color: var(--accent); }
+
+.vesting-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.vesting-badge.active { background: var(--blue-bg); color: var(--blue); }
+.vesting-badge.vesting { background: var(--yellow-bg); color: var(--yellow); }
+.vesting-badge.fully-vested { background: var(--green-bg); color: var(--green); }
+.vesting-badge.exited { background: var(--red-bg); color: var(--red); }
+
+.cap-events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.cap-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  transition: var(--transition);
+}
+
+.cap-event:hover { border-color: var(--border-hover); }
+
+.cap-event-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  background: var(--accent-subtle);
+  flex-shrink: 0;
+}
+
+.cap-event-body { flex: 1; min-width: 0; }
+
+.cap-event-type {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+.cap-event-desc {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.cap-event-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 /* ===== TOAST ===== */
 .toast {
   position: fixed;
