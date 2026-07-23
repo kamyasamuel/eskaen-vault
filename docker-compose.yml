@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  vault:
+    build: .
+    container_name: eskaen-vault
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - JWT_SECRET=${JWT_SECRET:-change-this-secret-in-production}
+      - SUPER_ADMIN_KEY=${SUPER_ADMIN_KEY}
+      - TOKEN_EXPIRY_HOURS=24
+      - NODE_ENV=production
+    volumes:
+      - vault_data:/app/backend/uploads
+      - vault_db:/app/backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/stats"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  vault_data:
+  vault_db:

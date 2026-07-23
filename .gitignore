@@ -1,0 +1,13 @@
+node_modules/
+.env
+backend/uploads/
+backend/vault.db
+backend/vault.db-wal
+backend/vault.db-shm
+*.log
+.DS_Store
+.vscode/
+.idea/
+dist/
+build/
+*.local
