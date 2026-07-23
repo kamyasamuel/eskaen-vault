@@ -4,6 +4,8 @@ backend/uploads/
 backend/vault.db
 backend/vault.db-wal
 backend/vault.db-shm
+backend/node_modules/
+backend/package-lock.json
 *.log
 .DS_Store
 .vscode/
