@@ -8,7 +8,7 @@ const { v4: uuidv4 } = require('uuid');
 function seed() {
   console.log('Seeding database...');
 
-  // Seed categories matching the 15 documents
+  // Seed categories matching the document taxonomy
   const categories = [
     { id: uuidv4(), name: 'Founder Agreement', slug: 'founder-agreement', description: 'Define roles, equity splits, and decision-making among founders', icon: '🤝', sort_order: 1, min_role: 'viewer' },
     { id: uuidv4(), name: 'Incorporation Documents', slug: 'incorporation-documents', description: 'Legal establishment of your company as a separate entity', icon: '🏛️', sort_order: 2, min_role: 'viewer' },
@@ -16,13 +16,14 @@ function seed() {
     { id: uuidv4(), name: 'Cap Table', slug: 'cap-table', description: 'Ownership structure, equity distribution, and dilution tracking', icon: '📊', sort_order: 4, min_role: 'viewer' },
     { id: uuidv4(), name: 'ESOP Plan', slug: 'esop-plan', description: 'Employee Stock Ownership Plan for team motivation and retention', icon: '🎯', sort_order: 5, min_role: 'viewer' },
     { id: uuidv4(), name: 'Board Resolution', slug: 'board-resolution', description: 'Formal records of key decisions made by the board', icon: '📋', sort_order: 6, min_role: 'viewer' },
-    { id: uuidv4(), name: 'IP Assignment', slug: 'ip-assignment', description: 'Ensure all company IP is legally owned by the company', icon: '💡', sort_order: 7, min_role: 'viewer' },
-    { id: uuidv4(), name: 'Financial Model', slug: 'financial-model', description: 'Revenue, costs, cash flow, and profitability projections', icon: '📈', sort_order: 8, min_role: 'viewer' },
-    { id: uuidv4(), name: 'Corporate Documents', slug: 'corporate-documents', description: 'Certificate of Incorporation, M&A, statutory records', icon: '📁', sort_order: 9, min_role: 'viewer' },
-    { id: uuidv4(), name: 'Regulatory Compliance', slug: 'regulatory-compliance', description: 'Tax, industry, data privacy, and employment compliance', icon: '✅', sort_order: 10, min_role: 'viewer' },
-    { id: uuidv4(), name: 'Financial Statements', slug: 'financial-statements', description: 'Balance sheet, income statement, and cash flow', icon: '💰', sort_order: 11, min_role: 'viewer' },
-    { id: uuidv4(), name: 'Investment Memorandum', slug: 'investment-memorandum', description: 'Comprehensive overview of the investment opportunity', icon: '📘', sort_order: 12, min_role: 'viewer' },
-    { id: uuidv4(), name: 'Due Diligence', slug: 'due-diligence', description: 'Due diligence checklist and data room index', icon: '🔍', sort_order: 13, min_role: 'viewer' },
+    { id: uuidv4(), name: 'IP', slug: 'ip', description: 'Intellectual property registrations, assignments, and ownership records', icon: '💡', sort_order: 7, min_role: 'viewer' },
+    { id: uuidv4(), name: 'IP Assignment', slug: 'ip-assignment', description: 'Ensure all company IP is legally owned by the company', icon: '💡', sort_order: 8, min_role: 'viewer' },
+    { id: uuidv4(), name: 'Financial Model', slug: 'financial-model', description: 'Revenue, costs, cash flow, and profitability projections', icon: '📈', sort_order: 9, min_role: 'viewer' },
+    { id: uuidv4(), name: 'Corporate Documents', slug: 'corporate-documents', description: 'Certificate of Incorporation, M&A, statutory records', icon: '📁', sort_order: 10, min_role: 'viewer' },
+    { id: uuidv4(), name: 'Regulatory Compliance', slug: 'regulatory-compliance', description: 'Tax, industry, data privacy, and employment compliance', icon: '✅', sort_order: 11, min_role: 'viewer' },
+    { id: uuidv4(), name: 'Financial Statements', slug: 'financial-statements', description: 'Balance sheet, income statement, and cash flow', icon: '💰', sort_order: 12, min_role: 'viewer' },
+    { id: uuidv4(), name: 'Investment Memorandum', slug: 'investment-memorandum', description: 'Comprehensive overview of the investment opportunity', icon: '📘', sort_order: 13, min_role: 'viewer' },
+    { id: uuidv4(), name: 'Due Diligence', slug: 'due-diligence', description: 'Due diligence checklist and data room index', icon: '🔍', sort_order: 14, min_role: 'viewer' },
     { id: uuidv4(), name: 'General', slug: 'general', description: 'Other corporate and governance documents', icon: '📄', sort_order: 99, min_role: 'viewer' },
   ];
 

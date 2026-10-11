@@ -310,10 +310,10 @@ function renderDashboard() {
         </div>
         <div style="display:flex;gap:8px">
           ${perms.includes('upload') ? `<button class="btn btn-primary btn-sm" onclick="showUploadModal()"><i class="fas fa-upload"></i> Upload</button>` : ''}
-          ${role === 'super_admin' || role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="showCreateTokenModal()"><i class="fas fa-plus"></i> New Token</button>` : ''}
+          ${role === 'super_admin' || role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="showCreateTokenModal()"><i class="fas fa-plus"></i> Token</button>` : ''}
           ${role === 'super_admin' ? `
-            <button class="btn btn-primary btn-sm" onclick="showAddPoolModal()"><i class="fas fa-layer-group"></i> Add Pool</button>
-            <button class="btn btn-primary btn-sm" onclick="showAddShareholderModal()"><i class="fas fa-user-plus"></i> Add Shareholder</button>
+            <button class="btn btn-primary btn-sm" onclick="showAddPoolModal()"><i class="fas fa-layer-group"></i> Pool</button>
+            <button class="btn btn-primary btn-sm" onclick="showAddShareholderModal()"><i class="fas fa-user-plus"></i> Shareholder</button>
           ` : ''}
         </div>
       </div>
@@ -438,6 +438,7 @@ function renderDocCard(doc) {
     'cap-table': '📊',
     'esop-plan': '🎯',
     'board-resolution': '📋',
+    'ip': '💡',
     'ip-assignment': '💡',
     'financial-model': '📈',
     'corporate-documents': '📁',
@@ -475,7 +476,7 @@ async function showDocDetail(docId) {
     
     const iconMap = {
       'founder-agreement': '🤝', 'incorporation-documents': '🏛️', 'shareholders-agreement': '📜',
-      'cap-table': '📊', 'esop-plan': '🎯', 'board-resolution': '📋', 'ip-assignment': '💡',
+      'cap-table': '📊', 'esop-plan': '🎯', 'board-resolution': '📋', 'ip': '💡', 'ip-assignment': '💡',
       'financial-model': '📈', 'corporate-documents': '📁', 'regulatory-compliance': '✅',
       'financial-statements': '💰', 'investment-memorandum': '📘', 'due-diligence': '🔍'
     };
@@ -1196,65 +1197,78 @@ async function handleEditPool(poolId) {
   } catch (err) { showToast(err.message, 'error'); }
 }
 
-function showAddShareholderModal() {
-  const pools = state.equityPools;
-  modal('Add Shareholder', `
-    <div class="form-group">
-      <label>Name</label>
-      <input type="text" id="sh-name" placeholder="Full name or entity name" />
-    </div>
-    <div class="form-group">
-      <label>Email</label>
-      <input type="email" id="sh-email" placeholder="email@example.com" />
-    </div>
-    <div class="form-group">
-      <label>Type</label>
-      <select id="sh-type">
-        <option value="founder">Founder</option>
-        <option value="investor">Investor</option>
-        <option value="employee">Employee</option>
-        <option value="advisor">Advisor</option>
-      </select>
-    </div>
-    <div class="form-group">
-      <label>Equity Pool</label>
-      <select id="sh-pool">
-        <option value="">Select pool...</option>
-        ${pools.map(p => `<option value="${p.id}">${p.name} (${p.total_shares.toLocaleString()} authorized)</option>`).join('')}
-      </select>
-    </div>
-    <div class="form-group">
-      <label>Shares Owned</label>
-      <input type="number" id="sh-shares" placeholder="Number of shares" min="1" />
-    </div>
-    <div class="form-group">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-        <input type="checkbox" id="sh-has-vesting" onchange="toggleVestingFields()" />
-        Has Vesting Schedule
-      </label>
-    </div>
-    <div id="vesting-fields" style="display:none">
+async function showAddShareholderModal() {
+  showLoading(true);
+  try {
+    await loadEquityPools();
+    const pools = state.equityPools || [];
+    const poolOptions = pools.length
+      ? pools.map(p => `<option value="${p.id}">${p.name} (${p.total_shares.toLocaleString()} authorized)</option>`).join('')
+      : '<option value="" disabled>No equity pools available</option>';
+
+    modal('Add Shareholder', `
       <div class="form-group">
-        <label>Vesting Start Date</label>
-        <input type="date" id="sh-vesting-start" />
+        <label>Name</label>
+        <input type="text" id="sh-name" placeholder="Full name or entity name" />
       </div>
       <div class="form-group">
-        <label>Vesting End Date</label>
-        <input type="date" id="sh-vesting-end" />
+        <label>Email</label>
+        <input type="email" id="sh-email" placeholder="email@example.com" />
       </div>
       <div class="form-group">
-        <label>Cliff Date</label>
-        <input type="date" id="sh-cliff-date" />
+        <label>Type</label>
+        <select id="sh-type">
+          <option value="founder">Founder</option>
+          <option value="investor">Investor</option>
+          <option value="employee">Employee</option>
+          <option value="advisor">Advisor</option>
+        </select>
       </div>
-    </div>
-    <div class="form-group">
-      <label>Notes</label>
-      <textarea id="sh-notes" placeholder="Any additional notes..."></textarea>
-    </div>
-  `, `
-    <button class="btn btn-secondary btn-sm" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-primary btn-sm" onclick="handleAddShareholder()"><i class="fas fa-user-plus"></i> Add</button>
-  `);
+      <div class="form-group">
+        <label>Equity Pool</label>
+        <select id="sh-pool">
+          <option value="">Select pool...</option>
+          ${poolOptions}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Shares Owned</label>
+        <input type="number" id="sh-shares" placeholder="Number of shares" min="1" />
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="sh-has-vesting" onchange="toggleVestingFields()" />
+          Has Vesting Schedule
+        </label>
+      </div>
+      <div id="vesting-fields" style="display:none">
+        <div class="form-group">
+          <label>Vesting Start Date</label>
+          <input type="date" id="sh-vesting-start" />
+        </div>
+        <div class="form-group">
+          <label>Vesting End Date</label>
+          <input type="date" id="sh-vesting-end" />
+        </div>
+        <div class="form-group">
+          <label>Cliff Date</label>
+          <input type="date" id="sh-cliff-date" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea id="sh-notes" placeholder="Any additional notes..."></textarea>
+      </div>
+    `, `
+      <button class="btn btn-secondary btn-sm" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="handleAddShareholder()"><i class="fas fa-user-plus"></i> Add</button>
+    `);
+  } catch (err) {
+    console.error('Failed to load pools for Add Shareholder', err);
+    showToast('Unable to load equity pools', 'error');
+  } finally {
+    showLoading(false);
+  }
 }
 
 function toggleVestingFields() {
@@ -1293,9 +1307,13 @@ async function handleAddShareholder() {
 async function showEditShareholderModal(shId) {
   showLoading(true);
   try {
+    await loadEquityPools();
     const result = await api(`/api/cap-table/shareholders/${shId}`);
     const sh = result.shareholder;
-    const pools = state.equityPools;
+    const pools = state.equityPools || [];
+    const poolOptions = pools.length
+      ? pools.map(p => `<option value="${p.id}" ${sh.equity_pool_id === p.id ? 'selected' : ''}>${p.name}</option>`).join('')
+      : '<option value="" disabled>No equity pools available</option>';
 
     modal('Edit Shareholder', `
       <div class="form-group">
@@ -1315,7 +1333,8 @@ async function showEditShareholderModal(shId) {
       <div class="form-group">
         <label>Equity Pool</label>
         <select id="edit-sh-pool">
-          ${pools.map(p => `<option value="${p.id}" ${sh.equity_pool_id === p.id ? 'selected' : ''}>${p.name}</option>`).join('')}
+          <option value="">Select pool...</option>
+          ${poolOptions}
         </select>
       </div>
       <div class="form-group">

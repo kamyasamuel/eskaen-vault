@@ -2,7 +2,7 @@ node_modules
 .git
 uploads/*
 uploads
-data/*
+backend/data/*
 .env
 .env.*
 *.md
