@@ -18,12 +18,12 @@ Built for the 15-document startup governance framework at `vault.eskaen.com`.
 
 ## Role Permissions
 
-| Role | View | Upload | Edit | Delete | Manage Tokens | View Activity |
-|------|------|--------|------|--------|--------------|--------------|
-| Super Admin | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Admin | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Editor | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
-| Viewer | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Role        | View | Upload | Edit | Delete | Manage Tokens | View Activity |
+| ----------- | ---- | ------ | ---- | ------ | ------------- | ------------- |
+| Super Admin | ✓   | ✓     | ✓   | ✓     | ✓            | ✓            |
+| Admin       | ✓   | ✓     | ✓   | ✓     | ✓            | ✓            |
+| Editor      | ✓   | ✓     | ✓   | ✗     | ✗            | ✗            |
+| Viewer      | ✓   | ✗     | ✗   | ✗     | ✗            | ✗            |
 
 ## Quick Start
 
@@ -56,21 +56,23 @@ node index.js
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | API server port | `3001` |
-| `JWT_SECRET` | Secret for JWT signing | *required* |
-| `SUPER_ADMIN_KEY` | Override auto-generated super key | *auto* |
-| `TOKEN_EXPIRY_HOURS` | Default token lifetime | `24` |
-| `NODE_ENV` | Environment mode | `development` |
+| Variable               | Description                       | Default         |
+| ---------------------- | --------------------------------- | --------------- |
+| `PORT`               | API server port                   | `3001`        |
+| `JWT_SECRET`         | Secret for JWT signing            | *required*    |
+| `SUPER_ADMIN_KEY`    | Override auto-generated super key | *auto*        |
+| `TOKEN_EXPIRY_HOURS` | Default token lifetime            | `24`          |
+| `NODE_ENV`           | Environment mode                  | `development` |
 
 ## API Endpoints
 
 ### Authentication
+
 - `POST /api/auth/login` — Authenticate with API key, receive JWT
 - `GET /api/auth/verify` — Verify current token validity
 
 ### Documents
+
 - `GET /api/documents` — List documents (filter by category, search)
 - `GET /api/documents/:id` — Get document details
 - `GET /api/documents/:id/download` — Download document file
@@ -79,15 +81,18 @@ node index.js
 - `DELETE /api/documents/:id` — Archive document (Admin+)
 
 ### Tokens
+
 - `GET /api/tokens` — List all tokens (Admin+)
 - `POST /api/tokens` — Create new token (Admin+)
 - `DELETE /api/tokens/:id` — Revoke token (Admin+)
 - `PATCH /api/tokens/:id/extend` — Extend token expiry (Admin+)
 
 ### Categories
+
 - `GET /api/categories` — List all categories
 
 ### System
+
 - `GET /api/stats` — Dashboard statistics
 - `GET /api/activity` — Activity log (Admin+)
 
