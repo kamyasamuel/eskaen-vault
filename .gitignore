@@ -1,5 +1,6 @@
 node_modules/
 .env
+backend/data/
 backend/uploads/
 backend/vault.db
 backend/vault.db-wal

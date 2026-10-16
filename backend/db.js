@@ -74,6 +74,7 @@ db.exec(`
     total_shares INTEGER NOT NULL,
     class TEXT NOT NULL DEFAULT 'Common',
     description TEXT,
+    valuation INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
@@ -93,6 +94,31 @@ db.exec(`
     notes TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS financing_rounds (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    round_type TEXT NOT NULL DEFAULT 'priced',
+    pre_money_valuation INTEGER,
+    price_per_share REAL,
+    new_shares INTEGER NOT NULL DEFAULT 0,
+    equity_pool_id TEXT REFERENCES equity_pools(id),
+    closed_at TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS convertibles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    instrument_type TEXT NOT NULL DEFAULT 'safe' CHECK(instrument_type IN ('safe','note','convertible')),
+    amount INTEGER NOT NULL,
+    cap_amount INTEGER,
+    discount REAL,
+    status TEXT NOT NULL DEFAULT 'outstanding' CHECK(status IN ('outstanding','converted','cancelled')),
+    converted_round_id TEXT REFERENCES financing_rounds(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS cap_table_events (
@@ -120,5 +146,42 @@ try {
 } catch (e) {
   // Column already exists — ignore
 }
+
+// Migration: widen shareholders.status CHECK to include 'unvested'.
+// SQLite can't ALTER a CHECK constraint, so recreate the table preserving data.
+(function migrateShareholderStatus() {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='shareholders'").get();
+  if (row && /'unvested'/.test(row.sql)) return; // already migrated
+
+  if (row) {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN;
+      CREATE TABLE shareholders_new (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT,
+        type TEXT NOT NULL CHECK(type IN ('founder','investor','employee','advisor')),
+        shares_owned INTEGER NOT NULL DEFAULT 0,
+        equity_pool_id TEXT NOT NULL REFERENCES equity_pools(id),
+        vesting_start TEXT,
+        vesting_end TEXT,
+        cliff_date TEXT,
+        vested_shares INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('unvested','active','vesting','fully_vested','exited')),
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO shareholders_new SELECT id, name, email, type, shares_owned, equity_pool_id, vesting_start, vesting_end, cliff_date, vested_shares, status, notes, created_at, updated_at FROM shareholders;
+      DROP TABLE shareholders;
+      ALTER TABLE shareholders_new RENAME TO shareholders;
+      CREATE INDEX IF NOT EXISTS idx_shareholders_pool ON shareholders(equity_pool_id);
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
+    console.log('Migration: widened shareholders.status CHECK to include unvested');
+  }
+})();
 
 module.exports = db;
